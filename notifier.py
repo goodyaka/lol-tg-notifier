@@ -297,13 +297,102 @@ class GameWatcher(threading.Thread):
 
 
 # --------------------------------------------------------------------------- #
-#  Окно настроек (tkinter)
+#  Окно настроек (webview, с откатом на tkinter)
 # --------------------------------------------------------------------------- #
-_settings_lock = threading.Lock()
+class _JsApi:
+    """Мост между HTML-окном (JS) и Python. Методы вызываются из settings.html."""
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self._window = None
+
+    def _state(self) -> dict:
+        recips = [{"chat_id": r["chat_id"], "name": r.get("name", r["chat_id"]),
+                   "selected": r.get("selected", True)}
+                  for r in self.cfg.get("recipients", []) if isinstance(r, dict)]
+        return {
+            "game_mode": self.cfg.get("game_mode", "ranked"),
+            "send_to": self.cfg.get("send_to", "all"),
+            "messages": self.cfg.get("messages", {}),
+            "recipients": recips,
+            "token_embedded": bool(embedded_token()),
+        }
+
+    def _apply(self, payload: dict):
+        if payload.get("bot_token") and not embedded_token():
+            self.cfg["bot_token"] = payload["bot_token"].strip()
+        if payload.get("messages"):
+            self.cfg["messages"] = payload["messages"]
+        if payload.get("game_mode"):
+            self.cfg["game_mode"] = payload["game_mode"]
+        if payload.get("send_to"):
+            self.cfg["send_to"] = payload["send_to"]
+        selected = set(payload.get("selected", []))
+        for r in self.cfg.get("recipients", []):
+            if isinstance(r, dict):
+                r["selected"] = r["chat_id"] in selected
+        save_config(self.cfg)
+
+    # --- методы для JS ---
+    def save(self, payload):
+        self._apply(payload or {})
+        return {"ok": True}
+
+    def send(self, payload):
+        self._apply(payload or {})
+        if not has_valid_token(self.cfg):
+            return {"error": "Не задан токен бота"}
+        threading.Thread(target=lambda: broadcast(self.cfg), daemon=True).start()
+        return {"ok": True}
+
+    def collect(self, payload):
+        if payload and payload.get("bot_token") and not embedded_token():
+            self.cfg["bot_token"] = payload["bot_token"].strip()
+        if not has_valid_token(self.cfg):
+            return {"error": "Сначала задай токен бота"}
+        try:
+            added = fetch_new_recipients(self.cfg)
+        except Exception as e:
+            return {"error": f"Ошибка Telegram: {e}"}
+        return {"added": added, "recipients": self._state()["recipients"]}
+
+    def close(self, payload=None):
+        if self._window:
+            self._window.destroy()
+        return {"ok": True}
 
 
 def open_settings(cfg: dict, on_broadcast=None):
-    """Окно настроек: токен, режим игры, текст, кому слать, сбор получателей."""
+    """Окно настроек. Красивый webview-интерфейс; если webview недоступен — tkinter."""
+    try:
+        import webview  # pywebview
+    except Exception:
+        return open_settings_tk(cfg, on_broadcast)
+
+    try:
+        html = resource_path("settings.html").read_text(encoding="utf-8")
+    except Exception:
+        return open_settings_tk(cfg, on_broadcast)
+
+    api = _JsApi(cfg)
+    html = html.replace("STATE_JSON_PLACEHOLDER", json.dumps(api._state(), ensure_ascii=False))
+
+    try:
+        window = webview.create_window(
+            "Сбор друзей — настройки",
+            html=html, width=700, height=940,
+            background_color="#080d18", resizable=True,
+        )
+        api._window = window
+        webview.start()
+    except Exception as e:
+        # нет WebView2 / бэкенд не стартовал — откат на tkinter
+        print(f"webview не запустился ({e}) — открываю запасное окно.")
+        return open_settings_tk(cfg, on_broadcast)
+
+
+def open_settings_tk(cfg: dict, on_broadcast=None):
+    """Запасное окно настроек на tkinter (если webview недоступен)."""
     import tkinter as tk
     from tkinter import messagebox
 
@@ -490,16 +579,14 @@ def open_settings(cfg: dict, on_broadcast=None):
     root.mainloop()
 
 
-def open_settings_async(cfg: dict, on_broadcast=None):
-    """Открыть окно настроек в отдельном потоке (для вызова из трея). Один экземпляр."""
-    def target():
-        if not _settings_lock.acquire(blocking=False):
-            return
-        try:
-            open_settings(cfg, on_broadcast)
-        finally:
-            _settings_lock.release()
-    threading.Thread(target=target, daemon=True).start()
+def open_settings_process():
+    """Открыть окно настроек ОТДЕЛЬНЫМ процессом — webview требует своего главного потока."""
+    import subprocess
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--settings"]
+    else:
+        cmd = [sys.executable, str(Path(__file__).resolve()), "--settings"]
+    subprocess.Popen(cmd, close_fds=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -526,7 +613,8 @@ def run_tray(cfg: dict):
     state = {"running": False}
 
     def do_broadcast():
-        broadcast(cfg)
+        # перечитываем конфиг с диска — окно настроек (отдельный процесс) мог его изменить
+        broadcast(load_config())
 
     watcher = GameWatcher(cfg, on_launch=do_broadcast,
                           on_state=lambda r: state.__setitem__("running", r))
@@ -540,7 +628,7 @@ def run_tray(cfg: dict):
         threading.Thread(target=do_broadcast, daemon=True).start()
 
     def settings(icon, item):
-        open_settings_async(cfg, do_broadcast)
+        open_settings_process()
 
     def status_text(item):
         g = "в игре" if state["running"] else "не запущена"
