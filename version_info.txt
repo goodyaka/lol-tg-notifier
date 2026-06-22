@@ -1,0 +1,23 @@
+# Свойства .exe (PyInstaller --version-file). Помогает Windows опознать приложение.
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+        StringStruct('CompanyName', 'Avengers'),
+        StringStruct('FileDescription', 'Sbor druzey - Telegram notifier on game launch'),
+        StringStruct('FileVersion', '1.0.0.0'),
+        StringStruct('InternalName', 'LoL-TG-Notifier'),
+        StringStruct('LegalCopyright', 'Personal use'),
+        StringStruct('OriginalFilename', 'LoL-TG-Notifier.exe'),
+        StringStruct('ProductName', 'Sbor druzey'),
+        StringStruct('ProductVersion', '1.0.0.0'),
+      ])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)

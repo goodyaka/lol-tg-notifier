@@ -342,9 +342,29 @@ class _JsApi:
     def send(self, payload):
         self._apply(payload or {})
         if not has_valid_token(self.cfg):
-            return {"error": "Не задан токен бота"}
-        threading.Thread(target=lambda: broadcast(self.cfg), daemon=True).start()
-        return {"ok": True}
+            return {"error": "Токен бота не задан"}
+        recips = active_recipients(self.cfg)
+        if not recips:
+            return {"error": "Список пуст — нажми «Обновить список»"}
+        token = self.cfg["bot_token"]
+        try:
+            tg_call(token, "getMe")
+        except Exception as e:
+            return {"error": f"Токен неверный ({e})"}
+        text = active_message(self.cfg)
+        delay = float(self.cfg.get("send_delay_sec", 1.5))
+        sent, first_err = 0, None
+        for r in recips:
+            cid = r["chat_id"] if isinstance(r, dict) else r
+            try:
+                send_message(token, cid, text)
+                sent += 1
+            except Exception as e:
+                first_err = first_err or str(e)
+            time.sleep(delay)
+        if sent == 0:
+            return {"error": f"Не доставлено никому. {first_err or ''}".strip()}
+        return {"ok": True, "sent": sent, "total": len(recips)}
 
     def collect(self, payload):
         if payload and payload.get("bot_token") and not embedded_token():

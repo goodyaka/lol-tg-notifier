@@ -256,7 +256,8 @@ $("saveBtn").onclick = () => withBusy($("saveBtn"), "Сохраняю…", async
 
 $("sendBtn").onclick = () => withBusy($("sendBtn"), "Отправляю…", async () => {
   const res = await api("send", payload());
-  toast(res && res.error ? res.error : "Рассылка запущена ✓", res && res.error ? "err" : "ok");
+  if (res && res.error){ toast(res.error, "err"); return; }
+  toast(`Отправлено: ${res.sent} из ${res.total} ✓`);
 });
 
 $("collectBtn").onclick = () => withBusy($("collectBtn"), "Обновляю…", async () => {
