@@ -1,0 +1,10 @@
+{
+  "bot_token": "ВСТАВЬ_СЮДА_ТОКЕН_ОТ_BotFather",
+  "message": "🎮 Я запустил League of Legends — го в катку!",
+  "recipients": [],
+  "watch_processes": ["LeagueClient.exe", "League of Legends.exe"],
+  "poll_interval_sec": 5,
+  "send_delay_sec": 1.5,
+  "rearm_after_close": true,
+  "autostart_armed": true
+}
