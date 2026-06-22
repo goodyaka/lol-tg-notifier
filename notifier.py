@@ -408,7 +408,7 @@ def open_settings(cfg: dict, on_broadcast=None):
     try:
         window = webview.create_window(
             "Сбор друзей — настройки",
-            url=tmp_path, width=1100, height=900,
+            url=tmp_path, js_api=api, width=1100, height=900,
             maximized=True, background_color="#080d18", resizable=True,
         )
         api._window = window
