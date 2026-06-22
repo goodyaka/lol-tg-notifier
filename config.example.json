@@ -1,6 +1,12 @@
 {
   "bot_token": "ВСТАВЬ_СЮДА_ТОКЕН_ОТ_BotFather",
-  "message": "🎮 Я запустил League of Legends — го в катку!",
+  "game_mode": "ranked",
+  "send_to": "all",
+  "messages": {
+    "ranked": "🏆 AVENGERS, общий сбор! Го ранкеды в League of Legends!",
+    "aram": "💫 AVENGERS, общий сбор! Го АРАМ!",
+    "arena": "⚔️ AVENGERS, общий сбор! Го Арены!"
+  },
   "recipients": [],
   "watch_processes": ["LeagueClient.exe", "League of Legends.exe"],
   "poll_interval_sec": 5,

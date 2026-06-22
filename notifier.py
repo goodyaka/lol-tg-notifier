@@ -6,6 +6,7 @@ LoL → Telegram Notifier
 
 Режимы запуска:
     python notifier.py                # запустить трей-приложение (основной режим)
+    python notifier.py --settings      # открыть окно настроек
     python notifier.py --collect-ids  # собрать chat_id друзей, нажавших Start у бота
     python notifier.py --send-now      # разослать сообщение прямо сейчас (тест)
     python notifier.py --check         # проверить токен и список получателей
@@ -24,6 +25,14 @@ import requests
 CONFIG_PATH = Path(__file__).with_name("config.json")
 API = "https://api.telegram.org/bot{token}/{method}"
 
+# Режимы игры: ключ → (подпись в UI)
+GAME_MODES = [
+    ("ranked", "🏆 Ранкед"),
+    ("aram", "💫 АРАМ"),
+    ("arena", "⚔️ Арена"),
+]
+MODE_LABELS = dict(GAME_MODES)
+
 
 # --------------------------------------------------------------------------- #
 #  Конфиг
@@ -38,6 +47,28 @@ def load_config() -> dict:
 def save_config(cfg: dict) -> None:
     with CONFIG_PATH.open("w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def active_message(cfg: dict) -> str:
+    """Текст для текущего выбранного режима игры."""
+    mode = cfg.get("game_mode", "ranked")
+    msgs = cfg.get("messages", {})
+    return msgs.get(mode) or cfg.get("message", "")
+
+
+def active_recipients(cfg: dict) -> list:
+    """Список получателей с учётом режима 'всем' / 'выбрать вручную'."""
+    rs = cfg.get("recipients", [])
+    if cfg.get("send_to", "all") == "all":
+        return rs
+    result = []
+    for r in rs:
+        if isinstance(r, dict):
+            if r.get("selected", True):
+                result.append(r)
+        else:
+            result.append(r)
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -57,11 +88,15 @@ def send_message(token: str, chat_id, text: str):
 
 
 def broadcast(cfg: dict) -> tuple[int, int]:
-    """Разослать сообщение всем получателям. Возвращает (успешно, всего)."""
+    """Разослать сообщение активным получателям. Возвращает (успешно, всего)."""
     token = cfg["bot_token"]
-    recipients = cfg.get("recipients", [])
-    text = cfg.get("message", "")
+    recipients = active_recipients(cfg)
+    text = active_message(cfg)
     delay = float(cfg.get("send_delay_sec", 1.5))
+
+    mode_label = MODE_LABELS.get(cfg.get("game_mode", "ranked"), "?")
+    scope = "всем (Avengers)" if cfg.get("send_to", "all") == "all" else "выбранным"
+    print(f"Рассылка [{mode_label}] → {scope}: {len(recipients)} получателей")
 
     ok = 0
     for r in recipients:
@@ -116,7 +151,7 @@ def collect_ids(cfg: dict):
 
     cfg.setdefault("recipients", [])
     for cid, name in found.items():
-        cfg["recipients"].append({"chat_id": cid, "name": name})
+        cfg["recipients"].append({"chat_id": cid, "name": name, "selected": True})
     save_config(cfg)
     print(f"\nДобавлено {len(found)} получателей в config.json (всего {len(cfg['recipients'])}).")
 
@@ -179,6 +214,143 @@ class GameWatcher(threading.Thread):
 
 
 # --------------------------------------------------------------------------- #
+#  Окно настроек (tkinter)
+# --------------------------------------------------------------------------- #
+_settings_lock = threading.Lock()
+
+
+def open_settings(cfg: dict, on_broadcast=None):
+    """Окно настроек: режим игры, текст, кому слать."""
+    import tkinter as tk
+    from tkinter import messagebox
+
+    root = tk.Tk()
+    root.title("Настройки рассылки — LoL → Telegram")
+    root.configure(padx=18, pady=16)
+    root.resizable(False, False)
+
+    bold = ("Segoe UI", 11, "bold")
+
+    # --- локальные тексты режимов ---
+    messages = dict(cfg.get("messages", {}))
+    for key, _ in GAME_MODES:
+        messages.setdefault(key, cfg.get("message", ""))
+
+    mode_var = tk.StringVar(value=cfg.get("game_mode", "ranked"))
+    current_mode = {"key": mode_var.get()}
+
+    # === Режим игры ===
+    tk.Label(root, text="Во что играем:", font=bold).grid(row=0, column=0, sticky="w")
+    frm_mode = tk.Frame(root)
+    frm_mode.grid(row=1, column=0, sticky="w", pady=(2, 10))
+
+    text = tk.Text(root, width=46, height=3, wrap="word", font=("Segoe UI", 10))
+
+    def load_mode_text():
+        text.delete("1.0", "end")
+        text.insert("1.0", messages.get(current_mode["key"], ""))
+
+    def on_mode_change():
+        # сохранить текущий текст в прежний режим, загрузить новый
+        messages[current_mode["key"]] = text.get("1.0", "end").strip()
+        current_mode["key"] = mode_var.get()
+        load_mode_text()
+
+    for key, label in GAME_MODES:
+        tk.Radiobutton(frm_mode, text=label, variable=mode_var, value=key,
+                       command=on_mode_change).pack(side="left", padx=(0, 10))
+
+    # === Текст сообщения ===
+    tk.Label(root, text="Текст сообщения для этого режима:", font=bold)\
+        .grid(row=2, column=0, sticky="w")
+    text.grid(row=3, column=0, sticky="we", pady=(2, 12))
+    load_mode_text()
+
+    # === Кому отправлять ===
+    tk.Label(root, text="Кому отправлять:", font=bold).grid(row=4, column=0, sticky="w")
+    send_to = tk.StringVar(value=cfg.get("send_to", "all"))
+
+    frm_to = tk.Frame(root)
+    frm_to.grid(row=5, column=0, sticky="w", pady=(2, 0))
+
+    recips = cfg.get("recipients", [])
+    check_vars = []        # (recipient_dict, BooleanVar)
+    check_widgets = []
+
+    def update_checks_state():
+        state = "normal" if send_to.get() == "selected" else "disabled"
+        for cb in check_widgets:
+            cb.configure(state=state)
+
+    tk.Radiobutton(frm_to, text="🦸 Avengers — общий сбор (всем)",
+                   variable=send_to, value="all",
+                   command=update_checks_state).pack(anchor="w")
+    tk.Radiobutton(frm_to, text="Выбрать вручную:",
+                   variable=send_to, value="selected",
+                   command=update_checks_state).pack(anchor="w")
+
+    frm_list = tk.Frame(root)
+    frm_list.grid(row=6, column=0, sticky="w", padx=(24, 0))
+
+    if recips:
+        for r in recips:
+            name = r.get("name", r.get("chat_id")) if isinstance(r, dict) else r
+            v = tk.BooleanVar(value=(r.get("selected", True) if isinstance(r, dict) else True))
+            cb = tk.Checkbutton(frm_list, text=str(name), variable=v)
+            cb.pack(anchor="w")
+            if isinstance(r, dict):
+                check_vars.append((r, v))
+            check_widgets.append(cb)
+    else:
+        tk.Label(frm_list, text="(нет получателей — собери их через --collect-ids)",
+                 fg="#888").pack(anchor="w")
+
+    update_checks_state()
+
+    # === Кнопки ===
+    def apply_to_cfg():
+        messages[current_mode["key"]] = text.get("1.0", "end").strip()
+        cfg["messages"] = messages
+        cfg["game_mode"] = mode_var.get()
+        cfg["send_to"] = send_to.get()
+        for r, v in check_vars:
+            r["selected"] = v.get()
+        save_config(cfg)
+
+    def on_save():
+        apply_to_cfg()
+        messagebox.showinfo("Сохранено", "Настройки сохранены.")
+
+    def on_send_now():
+        apply_to_cfg()
+        if on_broadcast:
+            threading.Thread(target=on_broadcast, daemon=True).start()
+        else:
+            threading.Thread(target=lambda: broadcast(cfg), daemon=True).start()
+        messagebox.showinfo("Рассылка", "Рассылка запущена.")
+
+    frm_btn = tk.Frame(root)
+    frm_btn.grid(row=7, column=0, sticky="e", pady=(16, 0))
+    tk.Button(frm_btn, text="Разослать сейчас", command=on_send_now)\
+        .pack(side="right", padx=(8, 0))
+    tk.Button(frm_btn, text="Сохранить", command=on_save).pack(side="right")
+
+    root.mainloop()
+
+
+def open_settings_async(cfg: dict, on_broadcast=None):
+    """Открыть окно настроек в отдельном потоке (для вызова из трея). Один экземпляр."""
+    def target():
+        if not _settings_lock.acquire(blocking=False):
+            return
+        try:
+            open_settings(cfg, on_broadcast)
+        finally:
+            _settings_lock.release()
+    threading.Thread(target=target, daemon=True).start()
+
+
+# --------------------------------------------------------------------------- #
 #  Трей-приложение
 # --------------------------------------------------------------------------- #
 def run_tray(cfg: dict):
@@ -210,14 +382,20 @@ def run_tray(cfg: dict):
     def send_now(icon, item):
         threading.Thread(target=do_broadcast, daemon=True).start()
 
+    def settings(icon, item):
+        open_settings_async(cfg, do_broadcast)
+
     def status_text(item):
         g = "в игре" if state["running"] else "не запущена"
         a = "вкл" if watcher.armed else "выкл"
-        return f"LoL: {g} · рассылка: {a}"
+        mode = MODE_LABELS.get(cfg.get("game_mode", "ranked"), "?")
+        scope = "Avengers (всем)" if cfg.get("send_to", "all") == "all" else "выбранным"
+        return f"LoL: {g} · {mode} → {scope} · авто: {a}"
 
     menu = pystray.Menu(
         pystray.MenuItem(status_text, None, enabled=False),
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Настройки…", settings),
         pystray.MenuItem("Рассылка активна", toggle_armed,
                          checked=lambda item: watcher.armed),
         pystray.MenuItem("Разослать сейчас", send_now),
@@ -258,6 +436,8 @@ def main():
         broadcast(cfg)
     elif arg == "--check":
         validate(cfg)
+    elif arg == "--settings":
+        open_settings(cfg)  # на главном потоке — безопасно на любой ОС
     else:
         validate(cfg)
         run_tray(cfg)
