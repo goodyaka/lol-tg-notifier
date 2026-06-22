@@ -30,6 +30,12 @@ else:
 CONFIG_PATH = BASE_DIR / "config.json"
 API = "https://api.telegram.org/bot{token}/{method}"
 
+
+def resource_path(name: str) -> Path:
+    """Путь к ресурсу (assets/...). В .exe PyInstaller распаковывает их в _MEIPASS."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    return base / "assets" / name
+
 # Дефолтный конфиг — создаётся при первом запуске, если файла ещё нет
 DEFAULT_CONFIG = {
     "bot_token": "",
@@ -302,18 +308,45 @@ def open_settings(cfg: dict, on_broadcast=None):
     from tkinter import messagebox
 
     root = tk.Tk()
-    root.title("Настройки — LoL → Telegram")
-    root.configure(padx=18, pady=16)
+    root.title("😺 Настройки — LoL → Telegram")
     root.resizable(False, False)
 
+    # --- кото-фон + иконка окна ---
+    try:
+        bg_photo = tk.PhotoImage(file=str(resource_path("cat_bg.png")))
+        W, H = bg_photo.width(), bg_photo.height()
+    except Exception:
+        bg_photo, W, H = None, 600, 820
+    try:
+        icon_photo = tk.PhotoImage(file=str(resource_path("cat_icon.png")))
+        root.iconphoto(True, icon_photo)
+    except Exception:
+        icon_photo = None
+    root._imgs = [bg_photo, icon_photo]  # защита от сборщика мусора
+
+    canvas = tk.Canvas(root, width=W, height=H, highlightthickness=0, bg="#0f121e")
+    canvas.pack()
+    if bg_photo:
+        canvas.create_image(0, 0, anchor="nw", image=bg_photo)
+    canvas.create_text(W // 2 + 1, 35, text="😺 Avengers — кото-сбор 🐾",
+                       font=("Segoe UI", 17, "bold"), fill="#000000")
+    canvas.create_text(W // 2, 34, text="😺 Avengers — кото-сбор 🐾",
+                       font=("Segoe UI", 17, "bold"), fill="#ffd166")
+
+    # карточка с контролами поверх котиков
+    card = tk.Frame(canvas, padx=18, pady=14, bg="#f6f5f2",
+                    relief="ridge", bd=2)
+    canvas.create_window(W // 2, 64, anchor="n", window=card)
+
     bold = ("Segoe UI", 11, "bold")
+    CARD = "#f6f5f2"
     r = 0  # счётчик строк grid
 
     # === Токен бота ===
-    tk.Label(root, text="Токен бота (от @BotFather):", font=bold)\
+    tk.Label(card, text="🐾 Токен бота (от @BotFather):", font=bold, bg=CARD)\
         .grid(row=r, column=0, sticky="w"); r += 1
     token_var = tk.StringVar(value=cfg.get("bot_token", ""))
-    token_entry = tk.Entry(root, textvariable=token_var, width=48, show="•")
+    token_entry = tk.Entry(card, textvariable=token_var, width=48, show="•")
     token_entry.grid(row=r, column=0, sticky="we", pady=(2, 12)); r += 1
 
     # --- локальные тексты режимов ---
@@ -325,12 +358,12 @@ def open_settings(cfg: dict, on_broadcast=None):
     current_mode = {"key": mode_var.get()}
 
     # === Режим игры ===
-    tk.Label(root, text="Во что играем:", font=bold)\
+    tk.Label(card, text="🎮 Во что играем:", font=bold, bg=CARD)\
         .grid(row=r, column=0, sticky="w"); r += 1
-    frm_mode = tk.Frame(root)
+    frm_mode = tk.Frame(card, bg=CARD)
     frm_mode.grid(row=r, column=0, sticky="w", pady=(2, 10)); r += 1
 
-    text = tk.Text(root, width=46, height=3, wrap="word", font=("Segoe UI", 10))
+    text = tk.Text(card, width=46, height=3, wrap="word", font=("Segoe UI", 10))
 
     def load_mode_text():
         text.delete("1.0", "end")
@@ -343,20 +376,21 @@ def open_settings(cfg: dict, on_broadcast=None):
 
     for key, label in GAME_MODES:
         tk.Radiobutton(frm_mode, text=label, variable=mode_var, value=key,
-                       command=on_mode_change).pack(side="left", padx=(0, 10))
+                       command=on_mode_change, bg=CARD,
+                       activebackground=CARD).pack(side="left", padx=(0, 10))
 
     # === Текст сообщения ===
-    tk.Label(root, text="Текст сообщения для этого режима:", font=bold)\
+    tk.Label(card, text="✉️ Текст сообщения для этого режима:", font=bold, bg=CARD)\
         .grid(row=r, column=0, sticky="w"); r += 1
     text.grid(row=r, column=0, sticky="we", pady=(2, 12)); r += 1
     load_mode_text()
 
     # === Кому отправлять ===
-    tk.Label(root, text="Кому отправлять:", font=bold)\
+    tk.Label(card, text="🐱 Кому отправлять:", font=bold, bg=CARD)\
         .grid(row=r, column=0, sticky="w"); r += 1
     send_to = tk.StringVar(value=cfg.get("send_to", "all"))
 
-    frm_to = tk.Frame(root)
+    frm_to = tk.Frame(card, bg=CARD)
     frm_to.grid(row=r, column=0, sticky="w", pady=(2, 0)); r += 1
 
     check_vars = []        # (recipient_dict, BooleanVar)
@@ -368,13 +402,13 @@ def open_settings(cfg: dict, on_broadcast=None):
             cb.configure(state=state)
 
     tk.Radiobutton(frm_to, text="🦸 Avengers — общий сбор (всем)",
-                   variable=send_to, value="all",
+                   variable=send_to, value="all", bg=CARD, activebackground=CARD,
                    command=update_checks_state).pack(anchor="w")
     tk.Radiobutton(frm_to, text="Выбрать вручную:",
-                   variable=send_to, value="selected",
+                   variable=send_to, value="selected", bg=CARD, activebackground=CARD,
                    command=update_checks_state).pack(anchor="w")
 
-    frm_list = tk.Frame(root)
+    frm_list = tk.Frame(card, bg=CARD)
     frm_list.grid(row=r, column=0, sticky="w", padx=(24, 0)); r += 1
 
     def rebuild_recipient_list():
@@ -388,20 +422,20 @@ def open_settings(cfg: dict, on_broadcast=None):
                 if not isinstance(rec, dict):
                     continue
                 v = tk.BooleanVar(value=rec.get("selected", True))
-                cb = tk.Checkbutton(frm_list, text=str(rec.get("name", rec.get("chat_id"))),
-                                    variable=v)
+                cb = tk.Checkbutton(frm_list, text="🐈 " + str(rec.get("name", rec.get("chat_id"))),
+                                    variable=v, bg=CARD, activebackground=CARD)
                 cb.pack(anchor="w")
                 check_vars.append((rec, v))
                 check_widgets.append(cb)
         else:
             tk.Label(frm_list, text="(пока пусто — нажми «Собрать получателей»)",
-                     fg="#888").pack(anchor="w")
+                     fg="#888", bg=CARD).pack(anchor="w")
         update_checks_state()
 
     rebuild_recipient_list()
 
     # === Сбор получателей ===
-    collect_status = tk.Label(root, text="", fg="#2563eb")
+    collect_status = tk.Label(card, text="", fg="#2563eb", bg=CARD)
     collect_status.grid(row=r, column=0, sticky="w", pady=(6, 0)); r += 1
 
     def on_collect():
@@ -445,13 +479,13 @@ def open_settings(cfg: dict, on_broadcast=None):
         threading.Thread(target=target, daemon=True).start()
         messagebox.showinfo("Рассылка", "Рассылка запущена.")
 
-    frm_btn = tk.Frame(root)
+    frm_btn = tk.Frame(card, bg=CARD)
     frm_btn.grid(row=r, column=0, sticky="we", pady=(16, 0))
-    tk.Button(frm_btn, text="Собрать получателей", command=on_collect)\
+    tk.Button(frm_btn, text="🐾 Собрать получателей", command=on_collect)\
         .pack(side="left")
-    tk.Button(frm_btn, text="Разослать сейчас", command=on_send_now)\
+    tk.Button(frm_btn, text="📨 Разослать сейчас", command=on_send_now)\
         .pack(side="right", padx=(8, 0))
-    tk.Button(frm_btn, text="Сохранить", command=on_save).pack(side="right")
+    tk.Button(frm_btn, text="💾 Сохранить", command=on_save).pack(side="right")
 
     root.mainloop()
 
@@ -473,16 +507,21 @@ def open_settings_async(cfg: dict, on_broadcast=None):
 # --------------------------------------------------------------------------- #
 def run_tray(cfg: dict):
     import pystray
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageEnhance
 
-    def make_icon(color):
+    def fallback_icon(color):
         img = Image.new("RGB", (64, 64), "#0f172a")
         d = ImageDraw.Draw(img)
         d.ellipse((16, 16, 48, 48), fill=color)
         return img
 
-    icon_armed = make_icon("#38bdf8")
-    icon_idle = make_icon("#64748b")
+    try:
+        cat = Image.open(resource_path("cat_icon.png")).convert("RGB")
+        icon_armed = cat                                   # активна — яркий кот
+        icon_idle = ImageEnhance.Color(cat).enhance(0.2)   # выкл — приглушённый кот
+    except Exception:
+        icon_armed = fallback_icon("#38bdf8")
+        icon_idle = fallback_icon("#64748b")
 
     state = {"running": False}
 
