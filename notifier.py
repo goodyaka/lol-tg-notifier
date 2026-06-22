@@ -68,10 +68,24 @@ def ensure_config() -> bool:
     return False
 
 
+def embedded_token() -> str:
+    """Токен, вшитый при сборке .exe (модуль _embedded). Пусто, если не вшивался."""
+    try:
+        from _embedded import TOKEN
+        return (TOKEN or "").strip()
+    except Exception:
+        return ""
+
+
 def load_config() -> dict:
     ensure_config()
     with CONFIG_PATH.open(encoding="utf-8") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    # Если токен вшит при сборке — он имеет приоритет (вводить вручную не нужно)
+    emb = embedded_token()
+    if emb:
+        cfg["bot_token"] = emb
+    return cfg
 
 
 def has_valid_token(cfg: dict) -> bool:
