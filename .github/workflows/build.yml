@@ -32,7 +32,7 @@ jobs:
           echo "Файл _embedded.py создан (значение скрыто)."
 
       - name: Собрать .exe
-        run: pyinstaller --onefile --noconsole --name "LoL-TG-Notifier" --hidden-import _embedded --collect-all webview --icon assets/cat_icon.ico --version-file version_info.txt --add-data "assets;assets" notifier.py
+        run: pyinstaller --onefile --noconsole --name "LoL-TG-Notifier" --hidden-import _embedded --hidden-import socks --collect-all webview --icon assets/cat_icon.ico --version-file version_info.txt --add-data "assets;assets" notifier.py
 
       - name: Выложить артефакт (для отладки)
         uses: actions/upload-artifact@v4

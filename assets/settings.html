@@ -129,6 +129,12 @@
     </div>
 
     <div class="section">
+      <p class="label">Прокси · если Telegram заблокирован</p>
+      <div class="field"><span class="lock">🌐</span><input id="proxy" type="text" placeholder="socks5://127.0.0.1:1080  или  http://host:port" autocomplete="off"></div>
+      <p class="hint">Оставь пустым, если Telegram открывается без VPN. Нужно тем, у кого api.telegram.org заблокирован.</p>
+    </div>
+
+    <div class="section">
       <div class="recip-head">
         <p class="label" style="margin:0">Кому <span class="count" id="recipCount"></span></p>
         <div class="seg" id="seg">
@@ -220,11 +226,13 @@ function toast(text, kind){
 }
 
 function commitMessage(){ messages[mode] = msgEl.value; }
+function proxyValue(){ const p = $("proxy"); return p ? p.value.trim() : ""; }
 
 function payload(){
   commitMessage();
   return {
     bot_token: tokenValue(),
+    proxy: proxyValue(),
     game_mode: mode,
     send_to: sendTo,
     messages: messages,
@@ -261,7 +269,7 @@ $("sendBtn").onclick = () => withBusy($("sendBtn"), "Отправляю…", asy
 });
 
 $("collectBtn").onclick = () => withBusy($("collectBtn"), "Обновляю…", async () => {
-  const res = await api("collect", {bot_token: tokenValue()});
+  const res = await api("collect", {bot_token: tokenValue(), proxy: proxyValue()});
   if (res && res.error){ toast(res.error, "err"); return; }
   recipients = (res.recipients || []).map(r => ({chat_id:r.chat_id, name:r.name, selected:r.selected!==false}));
   renderChips();
@@ -277,6 +285,7 @@ function api(method, arg){
   });
 }
 
+if ($("proxy")) $("proxy").value = S.proxy || "";
 renderToken(); renderTiles(); renderSeg(); renderChips();
 </script>
 </body></html>

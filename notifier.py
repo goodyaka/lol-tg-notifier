@@ -40,6 +40,7 @@ def resource_path(name: str) -> Path:
 # Дефолтный конфиг — создаётся при первом запуске, если файла ещё нет
 DEFAULT_CONFIG = {
     "bot_token": "",
+    "proxy": "",
     "game_mode": "ranked",
     "send_to": "all",
     "messages": {
@@ -92,7 +93,19 @@ def load_config() -> dict:
     emb = embedded_token()
     if emb:
         cfg["bot_token"] = emb
+    set_proxies(cfg.get("proxy", ""))
     return cfg
+
+
+# Прокси для запросов к Telegram (если api.telegram.org заблокирован)
+_PROXIES = None
+
+
+def set_proxies(proxy: str):
+    """Задать прокси для всех запросов к Telegram. Пусто — без прокси."""
+    global _PROXIES
+    proxy = (proxy or "").strip()
+    _PROXIES = {"http": proxy, "https": proxy} if proxy else None
 
 
 def has_valid_token(cfg: dict) -> bool:
@@ -132,7 +145,7 @@ def active_recipients(cfg: dict) -> list:
 # --------------------------------------------------------------------------- #
 def tg_call(token: str, method: str, **params):
     url = API.format(token=token, method=method)
-    r = requests.post(url, data=params, timeout=20)
+    r = requests.post(url, data=params, timeout=20, proxies=_PROXIES)
     data = r.json()
     if not data.get("ok"):
         raise RuntimeError(f"Telegram API error на {method}: {data}")
@@ -317,11 +330,15 @@ class _JsApi:
             "messages": self.cfg.get("messages", {}),
             "recipients": recips,
             "token_embedded": bool(embedded_token()),
+            "proxy": self.cfg.get("proxy", ""),
         }
 
     def _apply(self, payload: dict):
         if payload.get("bot_token") and not embedded_token():
             self.cfg["bot_token"] = payload["bot_token"].strip()
+        if "proxy" in payload:
+            self.cfg["proxy"] = (payload.get("proxy") or "").strip()
+            set_proxies(self.cfg["proxy"])
         if payload.get("messages"):
             self.cfg["messages"] = payload["messages"]
         if payload.get("game_mode"):
@@ -367,8 +384,12 @@ class _JsApi:
         return {"ok": True, "sent": sent, "total": len(recips)}
 
     def collect(self, payload):
-        if payload and payload.get("bot_token") and not embedded_token():
+        payload = payload or {}
+        if payload.get("bot_token") and not embedded_token():
             self.cfg["bot_token"] = payload["bot_token"].strip()
+        if "proxy" in payload:
+            self.cfg["proxy"] = (payload.get("proxy") or "").strip()
+            set_proxies(self.cfg["proxy"])
         if not has_valid_token(self.cfg):
             return {"error": "Сначала задай токен бота"}
         try:
