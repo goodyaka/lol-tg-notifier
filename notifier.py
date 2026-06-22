@@ -15,6 +15,7 @@ LoL → Telegram Notifier
 """
 
 import sys
+import os
 import json
 import time
 import threading
@@ -377,11 +378,18 @@ def open_settings(cfg: dict, on_broadcast=None):
     api = _JsApi(cfg)
     html = html.replace("STATE_JSON_PLACEHOLDER", json.dumps(api._state(), ensure_ascii=False))
 
+    # HTML с котами ~2 МБ, а у WebView2 лимит на NavigateToString (html=...) ≈ 2 МБ →
+    # чёрный экран. Поэтому рендерим во временный файл и грузим его по пути (без лимита).
+    import tempfile
+    fd, tmp_path = tempfile.mkstemp(suffix=".html", prefix="sbor_")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(html)
+
     try:
         window = webview.create_window(
             "Сбор друзей — настройки",
-            html=html, width=700, height=940,
-            background_color="#080d18", resizable=True,
+            url=tmp_path, width=1100, height=900,
+            maximized=True, background_color="#080d18", resizable=True,
         )
         api._window = window
         webview.start()
@@ -389,6 +397,11 @@ def open_settings(cfg: dict, on_broadcast=None):
         # нет WebView2 / бэкенд не стартовал — откат на tkinter
         print(f"webview не запустился ({e}) — открываю запасное окно.")
         return open_settings_tk(cfg, on_broadcast)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 def open_settings_tk(cfg: dict, on_broadcast=None):
