@@ -22,8 +22,31 @@ from pathlib import Path
 
 import requests
 
-CONFIG_PATH = Path(__file__).with_name("config.json")
+# Папка с конфигом: рядом с .exe (frozen) или рядом со скриптом
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).parent
+CONFIG_PATH = BASE_DIR / "config.json"
 API = "https://api.telegram.org/bot{token}/{method}"
+
+# Дефолтный конфиг — создаётся при первом запуске, если файла ещё нет
+DEFAULT_CONFIG = {
+    "bot_token": "",
+    "game_mode": "ranked",
+    "send_to": "all",
+    "messages": {
+        "ranked": "🏆 AVENGERS, общий сбор! Го ранкеды в League of Legends!",
+        "aram": "💫 AVENGERS, общий сбор! Го АРАМ!",
+        "arena": "⚔️ AVENGERS, общий сбор! Го Арены!",
+    },
+    "recipients": [],
+    "watch_processes": ["LeagueClient.exe", "League of Legends.exe"],
+    "poll_interval_sec": 5,
+    "send_delay_sec": 1.5,
+    "rearm_after_close": True,
+    "autostart_armed": True,
+}
 
 # Режимы игры: ключ → (подпись в UI)
 GAME_MODES = [
@@ -37,11 +60,23 @@ MODE_LABELS = dict(GAME_MODES)
 # --------------------------------------------------------------------------- #
 #  Конфиг
 # --------------------------------------------------------------------------- #
-def load_config() -> dict:
+def ensure_config() -> bool:
+    """Создать config.json со значениями по умолчанию, если его нет. True — если создан."""
     if not CONFIG_PATH.exists():
-        raise SystemExit(f"Не найден config.json по пути {CONFIG_PATH}")
+        save_config(DEFAULT_CONFIG)
+        return True
+    return False
+
+
+def load_config() -> dict:
+    ensure_config()
     with CONFIG_PATH.open(encoding="utf-8") as f:
         return json.load(f)
+
+
+def has_valid_token(cfg: dict) -> bool:
+    token = cfg.get("bot_token", "")
+    return bool(token) and "ВСТАВЬ" not in token
 
 
 def save_config(cfg: dict) -> None:
@@ -156,6 +191,34 @@ def collect_ids(cfg: dict):
     print(f"\nДобавлено {len(found)} получателей в config.json (всего {len(cfg['recipients'])}).")
 
 
+def fetch_new_recipients(cfg: dict) -> int:
+    """Один запрос getUpdates: добавляет всех, кто недавно нажал Start у бота.
+    Возвращает число добавленных. Используется кнопкой в окне настроек."""
+    token = cfg["bot_token"]
+    known = {r["chat_id"] if isinstance(r, dict) else r for r in cfg.get("recipients", [])}
+    updates = tg_call(token, "getUpdates", timeout=2)
+    added = 0
+    cfg.setdefault("recipients", [])
+    for u in updates:
+        msg = u.get("message") or u.get("edited_message")
+        if not msg:
+            continue
+        chat = msg["chat"]
+        if chat["type"] != "private":
+            continue
+        cid = chat["id"]
+        if cid in known:
+            continue
+        name = " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])) \
+            or chat.get("username") or str(cid)
+        cfg["recipients"].append({"chat_id": cid, "name": name, "selected": True})
+        known.add(cid)
+        added += 1
+    if added:
+        save_config(cfg)
+    return added
+
+
 # --------------------------------------------------------------------------- #
 #  Слежение за процессом LoL
 # --------------------------------------------------------------------------- #
@@ -220,16 +283,24 @@ _settings_lock = threading.Lock()
 
 
 def open_settings(cfg: dict, on_broadcast=None):
-    """Окно настроек: режим игры, текст, кому слать."""
+    """Окно настроек: токен, режим игры, текст, кому слать, сбор получателей."""
     import tkinter as tk
     from tkinter import messagebox
 
     root = tk.Tk()
-    root.title("Настройки рассылки — LoL → Telegram")
+    root.title("Настройки — LoL → Telegram")
     root.configure(padx=18, pady=16)
     root.resizable(False, False)
 
     bold = ("Segoe UI", 11, "bold")
+    r = 0  # счётчик строк grid
+
+    # === Токен бота ===
+    tk.Label(root, text="Токен бота (от @BotFather):", font=bold)\
+        .grid(row=r, column=0, sticky="w"); r += 1
+    token_var = tk.StringVar(value=cfg.get("bot_token", ""))
+    token_entry = tk.Entry(root, textvariable=token_var, width=48, show="•")
+    token_entry.grid(row=r, column=0, sticky="we", pady=(2, 12)); r += 1
 
     # --- локальные тексты режимов ---
     messages = dict(cfg.get("messages", {}))
@@ -240,9 +311,10 @@ def open_settings(cfg: dict, on_broadcast=None):
     current_mode = {"key": mode_var.get()}
 
     # === Режим игры ===
-    tk.Label(root, text="Во что играем:", font=bold).grid(row=0, column=0, sticky="w")
+    tk.Label(root, text="Во что играем:", font=bold)\
+        .grid(row=r, column=0, sticky="w"); r += 1
     frm_mode = tk.Frame(root)
-    frm_mode.grid(row=1, column=0, sticky="w", pady=(2, 10))
+    frm_mode.grid(row=r, column=0, sticky="w", pady=(2, 10)); r += 1
 
     text = tk.Text(root, width=46, height=3, wrap="word", font=("Segoe UI", 10))
 
@@ -251,7 +323,6 @@ def open_settings(cfg: dict, on_broadcast=None):
         text.insert("1.0", messages.get(current_mode["key"], ""))
 
     def on_mode_change():
-        # сохранить текущий текст в прежний режим, загрузить новый
         messages[current_mode["key"]] = text.get("1.0", "end").strip()
         current_mode["key"] = mode_var.get()
         load_mode_text()
@@ -262,18 +333,18 @@ def open_settings(cfg: dict, on_broadcast=None):
 
     # === Текст сообщения ===
     tk.Label(root, text="Текст сообщения для этого режима:", font=bold)\
-        .grid(row=2, column=0, sticky="w")
-    text.grid(row=3, column=0, sticky="we", pady=(2, 12))
+        .grid(row=r, column=0, sticky="w"); r += 1
+    text.grid(row=r, column=0, sticky="we", pady=(2, 12)); r += 1
     load_mode_text()
 
     # === Кому отправлять ===
-    tk.Label(root, text="Кому отправлять:", font=bold).grid(row=4, column=0, sticky="w")
+    tk.Label(root, text="Кому отправлять:", font=bold)\
+        .grid(row=r, column=0, sticky="w"); r += 1
     send_to = tk.StringVar(value=cfg.get("send_to", "all"))
 
     frm_to = tk.Frame(root)
-    frm_to.grid(row=5, column=0, sticky="w", pady=(2, 0))
+    frm_to.grid(row=r, column=0, sticky="w", pady=(2, 0)); r += 1
 
-    recips = cfg.get("recipients", [])
     check_vars = []        # (recipient_dict, BooleanVar)
     check_widgets = []
 
@@ -290,31 +361,61 @@ def open_settings(cfg: dict, on_broadcast=None):
                    command=update_checks_state).pack(anchor="w")
 
     frm_list = tk.Frame(root)
-    frm_list.grid(row=6, column=0, sticky="w", padx=(24, 0))
+    frm_list.grid(row=r, column=0, sticky="w", padx=(24, 0)); r += 1
 
-    if recips:
-        for r in recips:
-            name = r.get("name", r.get("chat_id")) if isinstance(r, dict) else r
-            v = tk.BooleanVar(value=(r.get("selected", True) if isinstance(r, dict) else True))
-            cb = tk.Checkbutton(frm_list, text=str(name), variable=v)
-            cb.pack(anchor="w")
-            if isinstance(r, dict):
-                check_vars.append((r, v))
-            check_widgets.append(cb)
-    else:
-        tk.Label(frm_list, text="(нет получателей — собери их через --collect-ids)",
-                 fg="#888").pack(anchor="w")
+    def rebuild_recipient_list():
+        for w in frm_list.winfo_children():
+            w.destroy()
+        check_vars.clear()
+        check_widgets.clear()
+        recips = cfg.get("recipients", [])
+        if recips:
+            for rec in recips:
+                if not isinstance(rec, dict):
+                    continue
+                v = tk.BooleanVar(value=rec.get("selected", True))
+                cb = tk.Checkbutton(frm_list, text=str(rec.get("name", rec.get("chat_id"))),
+                                    variable=v)
+                cb.pack(anchor="w")
+                check_vars.append((rec, v))
+                check_widgets.append(cb)
+        else:
+            tk.Label(frm_list, text="(пока пусто — нажми «Собрать получателей»)",
+                     fg="#888").pack(anchor="w")
+        update_checks_state()
 
-    update_checks_state()
+    rebuild_recipient_list()
+
+    # === Сбор получателей ===
+    collect_status = tk.Label(root, text="", fg="#2563eb")
+    collect_status.grid(row=r, column=0, sticky="w", pady=(6, 0)); r += 1
+
+    def on_collect():
+        cfg["bot_token"] = token_var.get().strip()
+        if not has_valid_token(cfg):
+            messagebox.showwarning("Нет токена", "Сначала вставь токен бота.")
+            return
+        collect_status.config(text="Опрашиваю Telegram…")
+        root.update_idletasks()
+        try:
+            added = fetch_new_recipients(cfg)
+        except Exception as e:
+            collect_status.config(text=f"Ошибка: {e}", fg="#dc2626")
+            return
+        rebuild_recipient_list()
+        total = len(cfg.get("recipients", []))
+        collect_status.config(
+            text=f"Добавлено новых: {added}. Всего получателей: {total}.", fg="#16a34a")
 
     # === Кнопки ===
     def apply_to_cfg():
         messages[current_mode["key"]] = text.get("1.0", "end").strip()
+        cfg["bot_token"] = token_var.get().strip()
         cfg["messages"] = messages
         cfg["game_mode"] = mode_var.get()
         cfg["send_to"] = send_to.get()
-        for r, v in check_vars:
-            r["selected"] = v.get()
+        for rec, v in check_vars:
+            rec["selected"] = v.get()
         save_config(cfg)
 
     def on_save():
@@ -323,14 +424,17 @@ def open_settings(cfg: dict, on_broadcast=None):
 
     def on_send_now():
         apply_to_cfg()
-        if on_broadcast:
-            threading.Thread(target=on_broadcast, daemon=True).start()
-        else:
-            threading.Thread(target=lambda: broadcast(cfg), daemon=True).start()
+        if not has_valid_token(cfg):
+            messagebox.showwarning("Нет токена", "Сначала вставь токен бота.")
+            return
+        target = on_broadcast or (lambda: broadcast(cfg))
+        threading.Thread(target=target, daemon=True).start()
         messagebox.showinfo("Рассылка", "Рассылка запущена.")
 
     frm_btn = tk.Frame(root)
-    frm_btn.grid(row=7, column=0, sticky="e", pady=(16, 0))
+    frm_btn.grid(row=r, column=0, sticky="we", pady=(16, 0))
+    tk.Button(frm_btn, text="Собрать получателей", command=on_collect)\
+        .pack(side="left")
     tk.Button(frm_btn, text="Разослать сейчас", command=on_send_now)\
         .pack(side="right", padx=(8, 0))
     tk.Button(frm_btn, text="Сохранить", command=on_save).pack(side="right")
@@ -425,6 +529,7 @@ def validate(cfg: dict):
 
 
 def main():
+    created = ensure_config()
     cfg = load_config()
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
 
@@ -439,7 +544,14 @@ def main():
     elif arg == "--settings":
         open_settings(cfg)  # на главном потоке — безопасно на любой ОС
     else:
-        validate(cfg)
+        # Нет токена (первый запуск / свежий .exe) → сразу открыть настройки
+        if created or not has_valid_token(cfg):
+            print("Токен не задан — открываю окно настроек.")
+            open_settings(cfg)
+            cfg = load_config()
+            if not has_valid_token(cfg):
+                print("Токен так и не задан. Выход.")
+                return
         run_tray(cfg)
 
 
