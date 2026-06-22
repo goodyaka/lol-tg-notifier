@@ -69,12 +69,23 @@
   .chips.locked .chip{cursor:default}
   .empty{grid-column:1/-1;color:var(--muted);font-size:13px;padding:6px 2px}
   .bar{display:flex;align-items:center;gap:12px;margin:26px -28px -24px;padding:18px 28px;background:linear-gradient(180deg,transparent,rgba(0,0,0,.25));border-top:1px solid var(--line)}
-  .btn{border:0;font:inherit;font-weight:700;border-radius:11px;cursor:pointer;transition:.15s}
-  .btn.ghost{background:transparent;color:var(--muted);padding:11px 6px;font-size:13.5px}
-  .btn.ghost:hover{color:var(--text)}
+  .btn{border:0;font:inherit;font-weight:700;border-radius:11px;cursor:pointer;user-select:none;
+    transition:transform .08s ease, filter .12s, background .12s, box-shadow .12s, opacity .12s}
+  .btn:active{transform:translateY(1px) scale(.97)}
+  .btn:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+  .btn[disabled]{opacity:.55;cursor:progress;transform:none;filter:saturate(.6)}
   .btn.sec{background:var(--panel-2);color:var(--text);padding:12px 18px;font-size:13.5px;border:1px solid var(--line)}
+  .btn.sec:hover{background:#243358;border-color:#3a4d77}
+  .btn.sec:active{background:#1a2742}
   .btn.primary{margin-left:auto;background:linear-gradient(180deg,#F2C24E,#E0A526);color:#1a1304;padding:13px 26px;font-size:14.5px;box-shadow:0 12px 26px -10px rgba(232,179,57,.6)}
-  .btn.primary:hover{filter:brightness(1.06)}
+  .btn.primary:hover{filter:brightness(1.07)}
+  .btn.primary:active{filter:brightness(.95)}
+  .tile:active{transform:scale(.98)}
+  .seg button{transition:transform .08s, background .12s, color .12s}
+  .seg button:active{transform:scale(.96)}
+  .chip{transition:transform .08s, border-color .12s}
+  .chips:not(.locked) .chip:active{transform:scale(.99)}
+  .count{margin-left:6px;color:var(--gold);font-weight:800;font-size:12px;letter-spacing:0}
   .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);opacity:0;background:#0c1426;border:1px solid var(--line);color:var(--text);padding:11px 18px;border-radius:11px;font-size:13.5px;font-weight:600;transition:.25s;pointer-events:none;z-index:9}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .toast.ok{border-color:rgba(63,193,206,.5)}.toast.err{border-color:#a23}
@@ -119,7 +130,7 @@
 
     <div class="section">
       <div class="recip-head">
-        <p class="label" style="margin:0">Кому</p>
+        <p class="label" style="margin:0">Кому <span class="count" id="recipCount"></span></p>
         <div class="seg" id="seg">
           <button data-to="all">🦸 Всем · Avengers</button>
           <button data-to="selected">Выбрать</button>
@@ -129,7 +140,7 @@
     </div>
 
     <div class="bar">
-      <button class="btn ghost" id="collectBtn">Собрать друзей</button>
+      <button class="btn sec" id="collectBtn">🔄 Обновить список</button>
       <button class="btn sec" id="saveBtn">Сохранить</button>
       <button class="btn primary" id="sendBtn">📨 Разослать сейчас</button>
     </div>
@@ -175,10 +186,15 @@ function renderSeg(){
     b.classList.toggle("on", b.dataset.to === sendTo));
 }
 
+function updateCount(){
+  $("recipCount").textContent = recipients.length ? "· " + recipients.length : "";
+}
+
 function renderChips(){
   const box = $("chips");
   box.classList.toggle("locked", sendTo === "all");
   box.innerHTML = "";
+  updateCount();
   if (!recipients.length){
     box.innerHTML = '<div class="empty">Пока никого. Друзья жмут Start у бота → нажми «Собрать друзей».</div>';
     return;
@@ -223,21 +239,33 @@ msgEl.oninput = commitMessage;
 document.querySelectorAll("#seg button").forEach(b =>
   b.onclick = () => { sendTo = b.dataset.to; renderSeg(); renderChips(); });
 
+// Блокируем кнопку и показываем «занят», пока идёт действие — чтобы клик был понятен
+async function withBusy(btn, busyText, fn){
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = busyText;
+  try { return await fn(); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
 $("closeBtn").onclick = () => api("close");
-$("saveBtn").onclick = async () => { await api("save", payload()); toast("Сохранено"); };
-$("sendBtn").onclick = async () => {
+
+$("saveBtn").onclick = () => withBusy($("saveBtn"), "Сохраняю…", async () => {
+  await api("save", payload());
+  toast("Сохранено ✓");
+});
+
+$("sendBtn").onclick = () => withBusy($("sendBtn"), "Отправляю…", async () => {
   const res = await api("send", payload());
-  toast(res && res.error ? res.error : "Рассылка запущена", res && res.error ? "err" : "ok");
-};
-$("collectBtn").onclick = async () => {
-  $("collectBtn").textContent = "Собираю…";
+  toast(res && res.error ? res.error : "Рассылка запущена ✓", res && res.error ? "err" : "ok");
+});
+
+$("collectBtn").onclick = () => withBusy($("collectBtn"), "Обновляю…", async () => {
   const res = await api("collect", {bot_token: tokenValue()});
-  $("collectBtn").textContent = "Собрать друзей";
   if (res && res.error){ toast(res.error, "err"); return; }
   recipients = (res.recipients || []).map(r => ({chat_id:r.chat_id, name:r.name, selected:r.selected!==false}));
   renderChips();
-  toast(`Добавлено: ${res.added}. Всего: ${recipients.length}`);
-};
+  toast(res.added ? `Добавлено новых: ${res.added}. Всего: ${recipients.length}` : `Список обновлён · ${recipients.length}`);
+});
 
 // мост к Python (pywebview) — с ожиданием готовности
 function api(method, arg){

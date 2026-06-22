@@ -683,7 +683,7 @@ def validate(cfg: dict):
 
 
 def main():
-    created = ensure_config()
+    ensure_config()
     cfg = load_config()
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
 
@@ -698,14 +698,12 @@ def main():
     elif arg == "--settings":
         open_settings(cfg)  # на главном потоке — безопасно на любой ОС
     else:
-        # Нет токена (первый запуск / свежий .exe) → сразу открыть настройки
-        if created or not has_valid_token(cfg):
-            print("Токен не задан — открываю окно настроек.")
-            open_settings(cfg)
-            cfg = load_config()
-            if not has_valid_token(cfg):
-                print("Токен так и не задан. Выход.")
-                return
+        # При запуске всегда показываем окно настроек, потом уходим в трей
+        open_settings(cfg)
+        cfg = load_config()
+        if not has_valid_token(cfg):
+            print("Токен не задан. Выход.")
+            return
         run_tray(cfg)
 
 
