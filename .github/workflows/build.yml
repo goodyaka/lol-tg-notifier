@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:   # можно запустить вручную из вкладки Actions
 
+permissions:
+  contents: write       # нужно, чтобы публиковать Release
+
 jobs:
   build:
     runs-on: windows-latest
@@ -23,8 +26,21 @@ jobs:
       - name: Собрать .exe
         run: pyinstaller --onefile --noconsole --name "LoL-TG-Notifier" notifier.py
 
-      - name: Выложить артефакт
+      - name: Выложить артефакт (для отладки)
         uses: actions/upload-artifact@v4
         with:
           name: LoL-TG-Notifier
           path: dist/LoL-TG-Notifier.exe
+
+      - name: Опубликовать Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: LoL → Telegram Notifier v${{ github.run_number }}
+          body: |
+            Автоматическая сборка из коммита ${{ github.sha }}.
+
+            **Скачать:** файл `LoL-TG-Notifier.exe` ниже.
+            Постоянная ссылка на последнюю версию:
+            https://github.com/${{ github.repository }}/releases/latest/download/LoL-TG-Notifier.exe
+          files: dist/LoL-TG-Notifier.exe
